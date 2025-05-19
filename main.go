@@ -1,15 +1,22 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jasonwashburn/gator/internal/config"
+	"github.com/jasonwashburn/gator/internal/database"
+	_ "github.com/lib/pq"
 )
 
 type state struct {
-	Config *config.ConfigFile
+	cfg *config.ConfigFile
+	db  *database.Queries
 }
 
 type command struct {
@@ -34,14 +41,58 @@ func (c *commands) register(name string, handler func(*state, command) error) {
 	c.allCommands[name] = handler
 }
 
+func handlerReset(s *state, cmd command) error {
+	if len(cmd.args) != 0 {
+		return fmt.Errorf("reset does not take any arguments")
+	}
+
+	if err := s.db.ResetUsers(context.Background()); err != nil {
+		return fmt.Errorf("failed to reset users: %w", err)
+	}
+
+	fmt.Println("Users reset")
+	return nil
+}
+
 func handlerLogin(s *state, cmd command) error {
 	if len(cmd.args) != 1 {
 		return fmt.Errorf("login requires a username")
 	}
 
-	user := cmd.args[0]
-	s.Config.SetUser(user)
-	fmt.Printf("Logged in as %s\n", user)
+	userName := cmd.args[0]
+	user, err := s.db.GetUser(context.Background(), userName)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if user.Name == "" {
+		return fmt.Errorf("user not found")
+	}
+
+	s.cfg.SetUser(userName)
+	fmt.Printf("Logged in as %s\n", userName)
+	return nil
+}
+
+func handlerRegister(s *state, cmd command) error {
+	if len(cmd.args) != 1 {
+		return fmt.Errorf("register requires a username")
+	}
+	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      cmd.args[0],
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create user: %w", err)
+	}
+	err = s.cfg.SetUser(user.Name)
+	if err != nil {
+		return fmt.Errorf("failed to set user: %w", err)
+	}
+
+	fmt.Printf("User created: %s\nUser Info: %+v\n", user.Name, user)
 	return nil
 }
 
@@ -51,13 +102,21 @@ func main() {
 		log.Fatal(err)
 	}
 	s := &state{
-		Config: &configFile,
+		cfg: &configFile,
 	}
+
+	db, err := sql.Open("postgres", s.cfg.DbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.db = database.New(db)
 
 	commands := &commands{
 		allCommands: make(map[string]func(*state, command) error),
 	}
 	commands.register("login", handlerLogin)
+	commands.register("register", handlerRegister)
+	commands.register("reset", handlerReset)
 	userArgs := os.Args
 	if len(userArgs) < 2 {
 		fmt.Println("not enough arguments")
