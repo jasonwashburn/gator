@@ -41,6 +41,28 @@ func (c *commands) register(name string, handler func(*state, command) error) {
 	c.allCommands[name] = handler
 }
 
+func handlerUsers(s *state, cmd command) error {
+	if len(cmd.args) != 0 {
+		return fmt.Errorf("list does not take any arguments")
+	}
+
+	users, err := s.db.ListUsers(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to list users: %w", err)
+	}
+
+	currentUser := s.cfg.CurrentUserName
+	for _, user := range users {
+		if user.Name == currentUser {
+			fmt.Printf("* %s (current)\n", user.Name)
+		} else {
+			fmt.Printf("* %s\n", user.Name)
+		}
+	}
+
+	return nil
+}
+
 func handlerReset(s *state, cmd command) error {
 	if len(cmd.args) != 0 {
 		return fmt.Errorf("reset does not take any arguments")
@@ -117,6 +139,7 @@ func main() {
 	commands.register("login", handlerLogin)
 	commands.register("register", handlerRegister)
 	commands.register("reset", handlerReset)
+	commands.register("users", handlerUsers)
 	userArgs := os.Args
 	if len(userArgs) < 2 {
 		fmt.Println("not enough arguments")
