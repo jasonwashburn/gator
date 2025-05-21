@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jasonwashburn/gator/internal/config"
 	"github.com/jasonwashburn/gator/internal/database"
+	"github.com/jasonwashburn/gator/internal/rss"
 	_ "github.com/lib/pq"
 )
 
@@ -39,6 +40,67 @@ func (c *commands) run(s *state, cmd command) error {
 
 func (c *commands) register(name string, handler func(*state, command) error) {
 	c.allCommands[name] = handler
+}
+
+func handlerFeeds(s *state, cmd command) error {
+	if len(cmd.args) != 0 {
+		return fmt.Errorf("feeds does not take any arguments")
+	}
+
+	feeds, err := s.db.ListFeeds(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to list feeds: %w", err)
+	}
+
+	for _, feed := range feeds {
+		user, err := s.db.GetUserByID(context.Background(), feed.UserID)
+		if err != nil {
+			return fmt.Errorf("failed to get user: %w", err)
+		}
+		fmt.Printf("* %s - %s Added by: %s\n", feed.Name, feed.Url, user.Name)
+	}
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.args) != 2 {
+		return fmt.Errorf("add-feed requires a name and URL")
+	}
+
+	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	storedFeed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      cmd.args[0],
+		Url:       cmd.args[1],
+		UserID:    user.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create feed: %w", err)
+	}
+
+	fmt.Printf("Feed created: %+v\n", storedFeed)
+	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	if len(cmd.args) != 0 {
+		return fmt.Errorf("agg does not take any arguments")
+	}
+
+	feed, err := rss.FetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	if err != nil {
+		return fmt.Errorf("failed to fetch feed: %w", err)
+	}
+
+	fmt.Printf("Feed: %+v\n", feed)
+
+	return nil
 }
 
 func handlerUsers(s *state, cmd command) error {
@@ -140,6 +202,9 @@ func main() {
 	commands.register("register", handlerRegister)
 	commands.register("reset", handlerReset)
 	commands.register("users", handlerUsers)
+	commands.register("agg", handlerAgg)
+	commands.register("addfeed", handlerAddFeed)
+	commands.register("feeds", handlerFeeds)
 	userArgs := os.Args
 	if len(userArgs) < 2 {
 		fmt.Println("not enough arguments")
