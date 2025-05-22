@@ -29,6 +29,19 @@ type commands struct {
 	allCommands map[string]func(*state, command) error
 }
 
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+		if err != nil {
+			return fmt.Errorf("failed to get user: %w", err)
+		}
+		if user.Name == "" {
+			return fmt.Errorf("user not found")
+		}
+		return handler(s, cmd, user)
+	}
+}
+
 func (c *commands) run(s *state, cmd command) error {
 	handler, ok := c.allCommands[cmd.command]
 	if !ok {
@@ -42,16 +55,12 @@ func (c *commands) register(name string, handler func(*state, command) error) {
 	c.allCommands[name] = handler
 }
 
-func handlerFollow(s *state, cmd command) error {
+func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) != 1 {
 		return fmt.Errorf("follow requires a feed URL")
 	}
 
 	feedURL := cmd.args[0]
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		return fmt.Errorf("failed to get user: %w", err)
-	}
 
 	feed, err := s.db.GetFeedByURL(context.Background(), feedURL)
 	if err != nil {
@@ -93,14 +102,9 @@ func handlerFeeds(s *state, cmd command) error {
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) != 2 {
 		return fmt.Errorf("add-feed requires a name and URL")
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		return fmt.Errorf("failed to get user: %w", err)
 	}
 
 	storedFeed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
@@ -224,14 +228,9 @@ func handlerRegister(s *state, cmd command) error {
 	return nil
 }
 
-func handlerFollowing(s *state, cmd command) error {
+func handlerFollowing(s *state, cmd command, user database.User) error {
 	if len(cmd.args) != 0 {
 		return fmt.Errorf("follows does not take any arguments")
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		return fmt.Errorf("failed to get user: %w", err)
 	}
 
 	follows, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
@@ -269,10 +268,10 @@ func main() {
 	commands.register("reset", handlerReset)
 	commands.register("users", handlerUsers)
 	commands.register("agg", handlerAgg)
-	commands.register("addfeed", handlerAddFeed)
+	commands.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	commands.register("feeds", handlerFeeds)
-	commands.register("follow", handlerFollow)
-	commands.register("following", handlerFollowing)
+	commands.register("follow", middlewareLoggedIn(handlerFollow))
+	commands.register("following", middlewareLoggedIn(handlerFollowing))
 	userArgs := os.Args
 	if len(userArgs) < 2 {
 		fmt.Println("not enough arguments")
