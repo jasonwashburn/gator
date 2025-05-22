@@ -6,3 +6,8 @@ RETURNING *;
 -- name: ListFeeds :many
 SELECT * FROM feeds
 ORDER BY created_at DESC;
+
+-- name: GetFeedByURL :one
+SELECT * FROM feeds
+WHERE url = $1
+LIMIT 1;
