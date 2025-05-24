@@ -2,11 +2,16 @@ package rss
 
 import (
 	"context"
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jasonwashburn/gator/internal/database"
 )
 
 type RSSFeed struct {
@@ -33,6 +38,7 @@ func FetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	}
 	req.Header.Set("User-Agent", "gator")
 
+	fmt.Printf("Fetching feed: %s\n", feedURL)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -60,4 +66,48 @@ func FetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	}
 
 	return &feed, nil
+}
+
+func ScrapeFeeds(ctx context.Context, db *database.Queries) error {
+	nextFeed, err := db.GetNextFeedToFetch(ctx)
+	if err != nil {
+		return err
+	}
+	err = db.MarkFeedAsFetched(ctx, nextFeed.ID)
+	if err != nil {
+		return err
+	}
+
+	feed, err := FetchFeed(ctx, nextFeed.Url)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range feed.Channel.Item {
+		_, err := db.CreatePost(ctx, database.CreatePostParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Title:     item.Title,
+			Url:       item.Link,
+			Description: sql.NullString{
+				String: item.Description,
+				Valid:  true,
+			},
+			PublishedAt: sql.NullTime{
+				Time:  time.Now(),
+				Valid: true,
+			},
+			FeedID: nextFeed.ID,
+		})
+		if err != nil {
+			if err.Error() == "pq: duplicate key value violates unique constraint \"posts_url_key\"" {
+				continue
+			}
+			return err
+		}
+		fmt.Printf("Added post: %s\n", item.Title)
+	}
+
+	return nil
 }
